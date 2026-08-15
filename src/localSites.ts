@@ -5,11 +5,11 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
-export type LocalSiteProvider = "herd" | "valet" | "generic";
+export type LocalSiteProvider = "herd" | "valet" | "mamp" | "generic";
 
 export interface LocalSite {
   provider: LocalSiteProvider;
-  path: string;
+  path?: string;
   hostname: string;
   protocol: "http" | "https";
   port: number;
@@ -36,21 +36,10 @@ function parseUrl(value: string): {
     }
 
     const protocol = url.protocol === "https:" ? "https" : "http";
-    let port: number;
+    const defaultPort = protocol === "https" ? 443 : 80;
+    const port = url.port ? Number(url.port) : defaultPort;
 
-    if (url.port) {
-      port = Number(url.port);
-    } else if (protocol === "https") {
-      port = 443;
-    } else {
-      port = 80;
-    }
-
-    return {
-      hostname: url.hostname,
-      protocol,
-      port,
-    };
+    return { hostname: url.hostname, protocol, port };
   } catch {
     return null;
   }
@@ -83,9 +72,11 @@ function objectsFromJson(value: unknown): Record<string, unknown>[] {
 
   const object = value as Record<string, unknown>;
 
-  return [object.sites, object.data, object.results]
-    .map(collection => objectsFromJson(collection))
-    .find(result => result.length > 0) || [];
+  return (
+    [object.sites, object.data, object.results]
+      .map(collection => objectsFromJson(collection))
+      .find(result => result.length > 0) || []
+  );
 }
 
 async function commandExists(command: string): Promise<boolean> {
@@ -97,50 +88,64 @@ async function commandExists(command: string): Promise<boolean> {
   }
 }
 
-function parseHerdLinkLine(line: string, workspacePath: string): LocalSite | null {
-  const columns = line
-    .split("|")
-    .map(value => value.trim())
-    .filter(Boolean);
+function deduplicateSites(sites: LocalSite[]): LocalSite[] {
+  const seen = new Set<string>();
 
-  if (columns.length < 4) {
-    return null;
-  }
+  return sites.filter(site => {
+    const key = `${site.hostname.toLowerCase()}|${site.port}|${site.protocol}`;
 
-  const [, , rawUrl, sitePath] = columns;
+    if (seen.has(key)) {
+      return false;
+    }
 
-  if (!sitePath || !rawUrl || !isSamePath(sitePath, workspacePath)) {
-    return null;
-  }
-
-  const parsed = parseUrl(rawUrl);
-
-  return parsed
-    ? {
-        provider: "herd",
-        path: sitePath,
-        ...parsed,
-      }
-    : null;
+    seen.add(key);
+    return true;
+  });
 }
 
-async function detectHerdSites(workspacePath: string): Promise<LocalSite | null> {
-  if (!(await commandExists("herd"))) {
-    return null;
-  }
+function parseHerdLinks(output: string): LocalSite[] {
+  return output
+    .split(/\r?\n/)
+    .map(line => {
+      const columns = line
+        .split("|")
+        .map(value => value.trim())
+        .filter(Boolean);
 
+      if (columns.length < 4) {
+        return null;
+      }
+
+      const [, , rawUrl, sitePath] = columns;
+
+      if (!rawUrl) {
+        return null;
+      }
+
+      const parsed = parseUrl(rawUrl);
+
+      return parsed
+        ? { provider: "herd" as const, path: sitePath, ...parsed }
+        : null;
+    })
+    .filter((site): site is LocalSite => site !== null);
+}
+
+function parseHerdSitesJson(output: string): LocalSite[] {
   try {
-    const { stdout } = await execFileAsync("herd", ["sites", "--json"], {
-      maxBuffer: 1024 * 1024,
-    });
-    const rows = objectsFromJson(JSON.parse(stdout));
+    const rows = objectsFromJson(JSON.parse(output));
 
-    const site = rows
+    return rows
       .map(row => {
         const sitePath = firstString(row, ["path", "directory", "sitePath"]);
-        const rawUrl = firstString(row, ["url", "siteUrl", "host", "hostname"]);
+        const rawUrl = firstString(row, [
+          "url",
+          "siteUrl",
+          "host",
+          "hostname",
+        ]);
 
-        if (!sitePath || !rawUrl || !isSamePath(sitePath, workspacePath)) {
+        if (!rawUrl) {
           return null;
         }
 
@@ -156,59 +161,69 @@ async function detectHerdSites(workspacePath: string): Promise<LocalSite | null>
             }
           : null;
       })
-      .find(value => value !== null) || null;
+      .filter((site): site is LocalSite => site !== null);
+  } catch {
+    return [];
+  }
+}
 
-    if (site) {
-      return site;
+async function detectHerdSites(): Promise<LocalSite[]> {
+  if (!(await commandExists("herd"))) {
+    return [];
+  }
+
+  try {
+    const { stdout } = await execFileAsync("herd", ["sites", "--json"], {
+      maxBuffer: 1024 * 1024,
+    });
+    const sites = parseHerdSitesJson(stdout);
+
+    if (sites.length > 0) {
+      return sites;
     }
   } catch {
-    // Fall through to herd links.
+    // Fall through to links/parked output.
   }
 
   try {
     const { stdout } = await execFileAsync("herd", ["links"], {
       maxBuffer: 1024 * 1024,
     });
-
-    return stdout
-      .split(/\r?\n/)
-      .filter(line => line.includes("|"))
-      .map(line => parseHerdLinkLine(line, workspacePath))
-      .find(value => value !== null) || null;
+    return parseHerdLinks(stdout);
   } catch {
-    return null;
+    return [];
   }
 }
 
-function parseValetLinkLine(
-  line: string,
-  workspacePath: string
-): LocalSite | null {
-  const match = line.match(/^\s*([^\s]+)\s*=>\s*(.+)$/);
+function parseValetLinks(output: string): LocalSite[] {
+  return output
+    .split(/\r?\n/)
+    .map(line => {
+      const match = line.match(/^\s*([^\s]+)\s*=>\s*(.+)$/);
 
-  if (!match) {
-    return null;
-  }
+      if (!match) {
+        return null;
+      }
 
-  const [, hostname, sitePath] = match;
-  const normalizedSitePath = sitePath.trim();
+      const [, hostname, sitePath] = match;
+      const normalizedHostname = hostname.endsWith(".test")
+        ? hostname
+        : `${hostname}.test`;
 
-  if (!isSamePath(normalizedSitePath, workspacePath)) {
-    return null;
-  }
-
-  return {
-    provider: "valet",
-    path: normalizedSitePath,
-    hostname: hostname.endsWith(".test") ? hostname : `${hostname}.test`,
-    protocol: "http",
-    port: 80,
-  };
+      return {
+        provider: "valet" as const,
+        path: sitePath.trim(),
+        hostname: normalizedHostname,
+        protocol: "http" as const,
+        port: 80,
+      };
+    })
+    .filter((site): site is LocalSite => site !== null);
 }
 
-async function detectValetSites(workspacePath: string): Promise<LocalSite | null> {
+async function detectValetSites(): Promise<LocalSite[]> {
   if (!(await commandExists("valet"))) {
-    return null;
+    return [];
   }
 
   try {
@@ -216,24 +231,46 @@ async function detectValetSites(workspacePath: string): Promise<LocalSite | null
       maxBuffer: 1024 * 1024,
     });
 
-    return stdout
-      .split(/\r?\n/)
-      .map(line => parseValetLinkLine(line, workspacePath))
-      .find(value => value !== null) || null;
+    return parseValetLinks(stdout);
   } catch {
-    return null;
+    return [];
   }
 }
 
-function genericSite(
-  workspacePath: string,
-  provider: LocalSiteProvider
-): LocalSite {
+async function detectMampSites(): Promise<LocalSite[]> {
+  if (process.platform !== "darwin") {
+    return [];
+  }
+
+  try {
+    const script = [
+      'const app = Application("MAMP PRO");',
+      "const hosts = app.listAllHosts();",
+      "JSON.stringify(hosts.map(host => String(host)));",
+    ].join("\n");
+
+    const { stdout } = await execFileAsync("osascript", ["-l", "JavaScript", "-e", script]);
+    const hosts = JSON.parse(stdout.trim()) as string[];
+
+    return hosts
+      .filter(hostname => Boolean(hostname))
+      .map(hostname => ({
+        provider: "mamp" as const,
+        hostname,
+        protocol: "http" as const,
+        port: 8888,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function genericSite(workspacePath: string): LocalSite {
   const name = path.basename(workspacePath).toLowerCase();
   const safeName = name.replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
 
   return {
-    provider,
+    provider: "generic",
     path: workspacePath,
     hostname: `${safeName || "site"}.test`,
     protocol: "http",
@@ -241,33 +278,41 @@ function genericSite(
   };
 }
 
-export async function detectLocalSite(
-  workspacePath?: string
-): Promise<LocalSite | null> {
+export async function detectLocalSites(workspacePath?: string): Promise<LocalSite[]> {
+  const [herdSites, valetSites, mampSites] = await Promise.all([
+    detectHerdSites(),
+    detectValetSites(),
+    detectMampSites(),
+  ]);
+
+  const allSites = deduplicateSites([
+    ...herdSites,
+    ...valetSites,
+    ...mampSites,
+  ]);
+
   if (!workspacePath) {
-    return null;
+    return allSites;
   }
 
   const resolvedPath = fs.realpathSync.native(workspacePath);
-  const herd = await detectHerdSites(resolvedPath);
+  const currentSites = allSites.filter(site =>
+    site.path ? isSamePath(site.path, resolvedPath) : false
+  );
 
-  if (herd) {
-    return herd;
+  if (currentSites.length > 0) {
+    return [
+      ...currentSites,
+      ...allSites.filter(site => !currentSites.includes(site)),
+    ];
   }
 
-  const valet = await detectValetSites(resolvedPath);
+  const herdAvailable = herdSites.length > 0;
+  const valetAvailable = valetSites.length > 0;
 
-  if (valet) {
-    return valet;
+  if (!herdAvailable && !valetAvailable && mampSites.length === 0) {
+    return [genericSite(resolvedPath)];
   }
 
-  if (await commandExists("herd")) {
-    return genericSite(resolvedPath, "herd");
-  }
-
-  if (await commandExists("valet")) {
-    return genericSite(resolvedPath, "valet");
-  }
-
-  return null;
+  return allSites;
 }
