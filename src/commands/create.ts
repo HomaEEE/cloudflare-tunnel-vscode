@@ -6,10 +6,15 @@ import { cloudflareTunnelStatusBar } from "../statusbar/statusbar";
 import { showErrorMessage, showInformationMessage } from "../utils";
 import { globalState } from "../state/global";
 import { config } from "../state/config";
-import { detectLocalSite, LocalSite } from "../localSites";
+import { detectLocalSites, LocalSite } from "../localSites";
 import * as constants from "../constants";
 
 const MAX_RECENT_LOCAL_ORIGINS = 10;
+
+interface LocalSiteItem extends vscode.QuickPickItem {
+  site?: LocalSite;
+  manual?: boolean;
+}
 
 function normalizeBaseDomain(value: string): string {
   return value
@@ -38,6 +43,17 @@ function buildLocalOrigin(site: LocalSite): string {
   return `${site.protocol}://${site.hostname}${port}`;
 }
 
+function providerLabel(provider: LocalSite["provider"]): string {
+  const labels: Record<LocalSite["provider"], string> = {
+    herd: "Herd",
+    valet: "Valet",
+    mamp: "MAMP",
+    generic: "Local",
+  };
+
+  return labels[provider];
+}
+
 async function selectLocalOrigin(): Promise<{
   origin: string;
   hostname: string;
@@ -45,76 +61,106 @@ async function selectLocalOrigin(): Promise<{
   port: number;
 }> {
   const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  const site = await detectLocalSite(workspacePath);
+  const sites = await detectLocalSites(workspacePath);
+  const currentPath = workspacePath || "";
 
-  if (site) {
-    const origin = buildLocalOrigin(site);
-    globalState.addRecentLocalOrigin(origin, MAX_RECENT_LOCAL_ORIGINS);
-
-    return {
-      origin,
-      hostname: site.hostname,
-      protocol: site.protocol,
-      port: site.port,
-    };
-  }
-
-  const recent = globalState.recentLocalOrigins;
-  const items: vscode.QuickPickItem[] = [
+  const items: LocalSiteItem[] = [
     {
       label: "$(edit) Enter local origin...",
-      description: "No Herd or Valet site was detected for this workspace",
+      description: "Manual hostname, URL or custom port",
+      manual: true,
     },
-    ...recent.map(origin => ({
-      label: origin,
-      description: "Recent local origin",
+    ...sites.map(site => ({
+      label: site.hostname,
+      description: `${providerLabel(site.provider)}${
+        site.path === currentPath ? " • current workspace" : ""
+      } • ${buildLocalOrigin(site)}`,
+      detail: site.path,
+      site,
     })),
   ];
 
   const selected = await vscode.window.showQuickPick(items, {
-    title: "Local origin",
-    placeHolder: "Select a recent origin or enter a new one",
+    title: "Local site",
+    placeHolder:
+      sites.length > 0
+        ? "Select a Herd / Valet / MAMP site or enter an origin manually"
+        : "No local sites detected — enter an origin manually",
     ignoreFocusOut: true,
+    matchOnDescription: true,
+    matchOnDetail: true,
   });
 
   if (!selected) {
-    throw new Error("A local origin is required.");
+    throw new Error("Local site selection was cancelled.");
   }
 
-  let input: string | undefined;
-
-  if (selected === items[0]) {
-    input = await vscode.window.showInputBox({
+  if (selected.manual) {
+    const recent = globalState.recentLocalOrigins;
+    const input = await vscode.window.showInputBox({
       title: "Local origin",
       value: recent[0] || `${config.localHostname}:${config.defaultPort}`,
-      placeHolder: "http://example.test or http://127.0.0.1:8080",
-      prompt: "Enter the local origin that cloudflared should reach.",
+      placeHolder: "example.test, http://example.test:8080",
+      prompt:
+        "Enter the local virtual host or service that cloudflared should proxy to.",
       ignoreFocusOut: true,
+      validateInput: value => {
+        if (!value.trim()) {
+          return "Local origin is required.";
+        }
+
+        try {
+          const url = new URL(
+            /^https?:\/\//i.test(value) ? value : `http://${value}`
+          );
+
+          if (!url.hostname) {
+            return "Enter a valid local hostname.";
+          }
+
+          if (url.pathname !== "/" || url.search || url.hash) {
+            return "Enter hostname and optional port only; paths are not supported.";
+          }
+
+          return undefined;
+        } catch {
+          return "Enter a valid hostname or URL.";
+        }
+      },
     });
-  } else {
-    input = selected.label;
+
+    if (!input) {
+      throw new Error("Local origin input was cancelled.");
+    }
+
+    const url = new URL(
+      /^https?:\/\//i.test(input) ? input : `http://${input}`
+    );
+    const { hostname } = url;
+    const protocol = url.protocol === "https:" ? "https" : "http";
+    const defaultPort = protocol === "https" ? 443 : 80;
+    const port = url.port ? Number(url.port) : defaultPort;
+    const origin = url.origin;
+
+    globalState.addRecentLocalOrigin(origin, MAX_RECENT_LOCAL_ORIGINS);
+
+    return { origin, hostname, protocol, port };
   }
 
-  if (!input) {
-    throw new Error("A local origin is required.");
+  if (!selected.site) {
+    throw new Error("The selected local site is invalid.");
   }
 
-  const url = new URL(
-    /^https?:\/\//i.test(input) ? input : `http://${input}`
-  );
-  const { hostname, port: rawPort } = url;
-  const protocol = url.protocol === "https:" ? "https" : "http";
-  const defaultPort = protocol === "https" ? 443 : 80;
-  const port = rawPort ? Number(rawPort) : defaultPort;
-  const origin = url.origin;
+  const { site } = selected;
+  const origin = buildLocalOrigin(site);
 
   globalState.addRecentLocalOrigin(origin, MAX_RECENT_LOCAL_ORIGINS);
 
   return {
     origin,
-    hostname,
-    protocol,
-    port,
+    hostname: site.hostname,
+    protocol: site.protocol,
+    port: site.port,
   };
 }
 
@@ -146,6 +192,10 @@ async function createTunnel(): Promise<void> {
     const local = await selectLocalOrigin();
     const publicHostname = await resolvePublicHostname(local.hostname);
 
+    if (cloudflareTunnelProvider.hasLocalOrigin(local.origin)) {
+      throw new Error(`A tunnel for ${local.origin} is already running.`);
+    }
+
     const tunnel = new CloudflareTunnel(
       config.localHostname,
       local.port,
@@ -153,10 +203,6 @@ async function createTunnel(): Promise<void> {
       local.origin,
       local.protocol
     );
-
-    if (cloudflareTunnelProvider.hasLocalOrigin(local.origin)) {
-      throw new Error(`A tunnel for ${local.origin} is already running.`);
-    }
 
     cloudflareTunnelProvider.addTunnel(tunnel);
     tunnel.subscribe(cloudflareTunnelProvider);
@@ -166,7 +212,7 @@ async function createTunnel(): Promise<void> {
       await vscode.window.withProgress<void>(
         {
           location: vscode.ProgressLocation.Notification,
-          title: `Starting cloudflare tunnel for ${tunnel.url}. [(Show logs)](command:${constants.Commands.openOutputChannel})\n`,
+          title: `Starting Cloudflare Tunnel for ${tunnel.localOrigin}. [(Show logs)](command:${constants.Commands.openOutputChannel})\n`,
           cancellable: true,
         },
         async (progress, token) => {
@@ -176,13 +222,15 @@ async function createTunnel(): Promise<void> {
           });
 
           if (tunnel.hostname) {
-            progress.report({ message: "Creating tunnel..." });
+            progress.report({ message: `Creating ${tunnel.tunnelName}...` });
             await cloudflared.createTunnel(tunnel);
 
-            progress.report({ message: "Creating tunnel config..." });
+            progress.report({ message: "Creating local routing config..." });
             cloudflared.createTunnelConfig(tunnel);
 
-            progress.report({ message: "Creating route dns..." });
+            progress.report({
+              message: `Routing ${tunnel.hostname} to ${tunnel.localHostname}...`,
+            });
             await cloudflared.routeDns(tunnel);
           }
 
