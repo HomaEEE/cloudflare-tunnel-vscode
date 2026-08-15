@@ -6,77 +6,148 @@ import { cloudflareTunnelStatusBar } from "../statusbar/statusbar";
 import { showErrorMessage, showInformationMessage } from "../utils";
 import { globalState } from "../state/global";
 import { config } from "../state/config";
+import { detectLocalSite, LocalSite } from "../localSites";
 import * as constants from "../constants";
 
-function portValidateInput(value: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const port = parseInt(value, 10);
-  if (!port) {
-    return "Please enter a valid port number.";
-  }
-  if (port < 1 || port > 65535) {
-    return "Port number must be between 1 and 65535.";
-  }
-  if (cloudflareTunnelProvider.hasPort(port)) {
-    return "Port number is already in use.";
-  }
+const MAX_RECENT_LOCAL_ORIGINS = 10;
 
-  return undefined;
+function normalizeBaseDomain(value: string): string {
+  return value
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "")
+    .replace(/\.+$/, "")
+    .toLowerCase();
 }
 
-async function getPortInput(): Promise<number | null> {
-  const response = await vscode.window.showInputBox({
-    title: "Port number",
-    value: config.defaultPort.toString(),
-    prompt: "Select your local port number.",
+function getSubdomain(hostname: string): string {
+  const firstLabel = hostname.split(".")[0].toLowerCase();
+  const value = firstLabel.replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
+
+  if (!value || value.startsWith("-") || value.endsWith("-")) {
+    throw new Error(`Unable to derive a valid subdomain from ${hostname}.`);
+  }
+
+  return value;
+}
+
+function buildLocalOrigin(site: LocalSite): string {
+  const defaultPort = site.protocol === "https" ? 443 : 80;
+  const port = site.port === defaultPort ? "" : `:${site.port}`;
+
+  return `${site.protocol}://${site.hostname}${port}`;
+}
+
+async function selectLocalOrigin(): Promise<{
+  origin: string;
+  hostname: string;
+  protocol: "http" | "https";
+  port: number;
+}> {
+  const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const site = await detectLocalSite(workspacePath);
+
+  if (site) {
+    const origin = buildLocalOrigin(site);
+    globalState.addRecentLocalOrigin(origin, MAX_RECENT_LOCAL_ORIGINS);
+    return {
+      origin,
+      hostname: site.hostname,
+      protocol: site.protocol,
+      port: site.port,
+    };
+  }
+
+  const recent = globalState.recentLocalOrigins;
+  const items: vscode.QuickPickItem[] = [
+    {
+      label: "$(edit) Enter local origin...",
+      description: "No Herd or Valet site was detected for this workspace",
+    },
+    ...recent.map(origin => ({
+      label: origin,
+      description: "Recent local origin",
+    })),
+  ];
+
+  const selected = await vscode.window.showQuickPick(items, {
+    title: "Local origin",
+    placeHolder: "Select a recent origin or enter a new one",
     ignoreFocusOut: true,
-    validateInput: portValidateInput,
   });
-  return response ? parseInt(response, 10) : null;
+
+  if (!selected) {
+    throw new Error("A local origin is required.");
+  }
+
+  const input =
+    selected === items[0]
+      ? await vscode.window.showInputBox({
+          title: "Local origin",
+          value: recent[0] || `${config.localHostname}:${config.defaultPort}`,
+          placeHolder: "http://example.test or http://127.0.0.1:8080",
+          prompt: "Enter the local origin that cloudflared should reach.",
+          ignoreFocusOut: true,
+        })
+      : selected.label;
+
+  if (!input) {
+    throw new Error("A local origin is required.");
+  }
+
+  const url = new URL(/^https?:\/\//i.test(input) ? input : `http://${input}`);
+  const protocol = url.protocol === "https:" ? "https" : "http";
+  const defaultPort = protocol === "https" ? 443 : 80;
+  const port = url.port ? Number(url.port) : defaultPort;
+  const origin = url.origin;
+
+  globalState.addRecentLocalOrigin(origin, MAX_RECENT_LOCAL_ORIGINS);
+
+  return {
+    origin,
+    hostname: url.hostname,
+    protocol,
+    port,
+  };
 }
 
-function hostnameValidateInput(value: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  if (!/^[a-zA-Z0-9.-]+$/.test(value)) {
-    return "Invalid hostname. Only alphanumeric characters, dots, and dashes are allowed.";
-  }
-  if (cloudflareTunnelProvider.hasHostname(value)) {
-    return "Hostname is already in use.";
+async function resolvePublicHostname(localHostname: string): Promise<string | null> {
+  if (!globalState.isLoggedIn) {
+    return null;
   }
 
-  return undefined;
-}
+  const baseDomain = normalizeBaseDomain(config.defaultHostname);
 
-async function getHostname(): Promise<string | null> {
-  if (globalState.isLoggedIn) {
-    return (
-      (await vscode.window.showInputBox({
-        title: "Hostname",
-        value: config.defaultHostname,
-        placeHolder: "Enter a hostname",
-        ignoreFocusOut: true,
-        prompt:
-          "Your domain hostname. If not specified anything, it will generate a `.trycloudflare.com` subdomain. Make sure to login and give proper permissions before changing this setting. Example: `mytunnel.mydomain.com`",
-        validateInput: hostnameValidateInput,
-      })) || null
-    );
+  if (!baseDomain) {
+    return null;
   }
-  return null;
+
+  const subdomain = getSubdomain(localHostname);
+  const publicHostname = `${subdomain}.${baseDomain}`;
+
+  if (cloudflareTunnelProvider.hasHostname(publicHostname)) {
+    throw new Error(`Hostname is already in use: ${publicHostname}`);
+  }
+
+  return publicHostname;
 }
 
 async function createTunnel(): Promise<void> {
-  const port = await getPortInput();
-  if (!port) {
-    return;
-  }
-  const hostname = await getHostname();
-
   try {
-    const tunnel = new CloudflareTunnel(config.localHostname, port, hostname);
+    const local = await selectLocalOrigin();
+    const publicHostname = await resolvePublicHostname(local.hostname);
+
+    const tunnel = new CloudflareTunnel(
+      config.localHostname,
+      local.port,
+      publicHostname,
+      local.origin,
+      local.protocol
+    );
+
+    if (cloudflareTunnelProvider.hasLocalOrigin(local.origin)) {
+      throw new Error(`A tunnel for ${local.origin} is already running.`);
+    }
 
     cloudflareTunnelProvider.addTunnel(tunnel);
     tunnel.subscribe(cloudflareTunnelProvider);
@@ -95,15 +166,22 @@ async function createTunnel(): Promise<void> {
             cloudflareTunnelProvider.removeTunnel(tunnel);
           });
 
-          if (hostname) {
+          if (tunnel.hostname) {
             progress.report({ message: "Creating tunnel..." });
             await cloudflared.createTunnel(tunnel);
+
+            progress.report({ message: "Creating tunnel config..." });
+            cloudflared.createTunnelConfig(tunnel);
+
             progress.report({ message: "Creating route dns..." });
             await cloudflared.routeDns(tunnel);
           }
+
           progress.report({ message: "Starting tunnel..." });
           await cloudflared.startTunnel(tunnel);
+
           tunnel.process?.on("exit", () => {
+            cloudflared.cleanupTunnelConfig(tunnel);
             cloudflareTunnelProvider.removeTunnel(tunnel);
           });
         }
@@ -112,10 +190,13 @@ async function createTunnel(): Promise<void> {
       tunnel.status = CloudflareTunnelStatus.running;
 
       await showInformationMessage(
-        "Your Cloudflare Tunnel has been created!",
+        tunnel.hostname
+          ? `Tunnel created: ${tunnel.hostname}`
+          : "Quick Tunnel created",
         tunnel.tunnelUri
       );
     } catch (ex) {
+      cloudflared.cleanupTunnelConfig(tunnel);
       cloudflareTunnelProvider.removeTunnel(tunnel);
       showErrorMessage(ex);
     }
