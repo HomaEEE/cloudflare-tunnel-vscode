@@ -36,8 +36,13 @@ function parseUrl(value: string): {
     }
 
     const protocol = url.protocol === "https:" ? "https" : "http";
-    const defaultPort = protocol === "https" ? 443 : 80;
-    const port = url.port ? Number(url.port) : defaultPort;
+    let port = 80;
+
+    if (url.port) {
+      port = Number(url.port);
+    } else if (protocol === "https") {
+      port = 443;
+    }
 
     return { hostname: url.hostname, protocol, port };
   } catch {
@@ -182,7 +187,7 @@ async function detectHerdSites(): Promise<LocalSite[]> {
       return sites;
     }
   } catch {
-    // Fall through to links/parked output.
+    // Fall through to links output.
   }
 
   try {
@@ -249,7 +254,12 @@ async function detectMampSites(): Promise<LocalSite[]> {
       "JSON.stringify(hosts.map(host => String(host)));",
     ].join("\n");
 
-    const { stdout } = await execFileAsync("osascript", ["-l", "JavaScript", "-e", script]);
+    const { stdout } = await execFileAsync("osascript", [
+      "-l",
+      "JavaScript",
+      "-e",
+      script,
+    ]);
     const hosts = JSON.parse(stdout.trim()) as string[];
 
     return hosts
@@ -278,7 +288,9 @@ function genericSite(workspacePath: string): LocalSite {
   };
 }
 
-export async function detectLocalSites(workspacePath?: string): Promise<LocalSite[]> {
+export async function detectLocalSites(
+  workspacePath?: string
+): Promise<LocalSite[]> {
   const [herdSites, valetSites, mampSites] = await Promise.all([
     detectHerdSites(),
     detectValetSites(),
@@ -307,12 +319,9 @@ export async function detectLocalSites(workspacePath?: string): Promise<LocalSit
     ];
   }
 
-  const herdAvailable = herdSites.length > 0;
-  const valetAvailable = valetSites.length > 0;
-
-  if (!herdAvailable && !valetAvailable && mampSites.length === 0) {
-    return [genericSite(resolvedPath)];
+  if (allSites.length > 0) {
+    return allSites;
   }
 
-  return allSites;
+  return [genericSite(resolvedPath)];
 }
