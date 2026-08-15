@@ -17,6 +17,7 @@ export class CloudflareTunnelProvider
     if (tunnel) {
       return [];
     }
+
     return this.#tunnels;
   }
 
@@ -27,9 +28,11 @@ export class CloudflareTunnelProvider
 
   removeTunnel(tunnel: CloudflareTunnel): void {
     const index = this.#tunnels.indexOf(tunnel);
+
     if (index === -1) {
       return;
     }
+
     this.#tunnels.splice(index, 1);
     this.refresh();
   }
@@ -40,16 +43,27 @@ export class CloudflareTunnelProvider
 
   runningTunnels(): CloudflareTunnel[] {
     return this.#tunnels.filter(
-      (tunnel) => tunnel.status === CloudflareTunnelStatus.running
+      tunnel => tunnel.status === CloudflareTunnelStatus.running
     );
   }
 
   hasPort(port: number): boolean {
-    return this.#tunnels.some((tunnel) => tunnel.port === port);
+    return this.#tunnels.some(tunnel => tunnel.port === port);
+  }
+
+  hasLocalOrigin(origin: string): boolean {
+    const normalize = (value: string): string =>
+      value.trim().replace(/\/$/, "").toLowerCase();
+
+    return this.#tunnels.some(
+      tunnel => normalize(tunnel.localOrigin) === normalize(origin)
+    );
   }
 
   hasHostname(hostname: string): boolean {
-    return this.#tunnels.some((tunnel) => tunnel.hostname === hostname);
+    return this.#tunnels.some(
+      tunnel => tunnel.hostname?.toLowerCase() === hostname.toLowerCase()
+    );
   }
 }
 
