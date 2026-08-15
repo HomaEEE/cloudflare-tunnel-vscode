@@ -8,7 +8,9 @@ export enum CloudflareTunnelStatus {
 }
 
 export class CloudflareTunnel implements Publisher {
-  tunnelUri: string = "";
+  tunnelUri = "";
+  tunnelId?: string;
+  configPath?: string;
   process?: ChildProcess;
   #status: CloudflareTunnelStatus = CloudflareTunnelStatus.starting;
   private subscribers: Subscriber[] = [];
@@ -16,26 +18,42 @@ export class CloudflareTunnel implements Publisher {
   constructor(
     public localHostname: string,
     public port: number,
-    public hostname: string | null
+    public hostname: string | null,
+    public localOrigin: string,
+    public localProtocol: "http" | "https" = "http"
   ) {
     this.localHostname = localHostname;
     this.port = port;
     this.hostname = hostname;
+    this.localOrigin = localOrigin;
+    this.localProtocol = localProtocol;
   }
 
   get url(): string {
-    return `${this.localHostname}:${this.port}`;
+    return this.localOrigin;
+  }
+
+  get localService(): string {
+    return `${this.localProtocol}://${this.localHostname}:${this.port}`;
   }
 
   get label(): string {
-    return this.status === CloudflareTunnelStatus.running
-      ? this.shortTunnelUri
-      : this.url;
+    if (this.status === CloudflareTunnelStatus.running && this.tunnelUri) {
+      return this.shortTunnelUri;
+    }
+
+    return this.hostname || this.localHostname;
   }
 
   get description(): string {
-    const quickTunnel = this.isQuickTunnel ? "Quick Tunnel" : null;
-    return [this.url, this.status, quickTunnel, this.tunnelName]
+    const quickTunnel = this.isQuickTunnel ? "Quick Tunnel" : "Named Tunnel";
+
+    return [
+      this.localOrigin,
+      this.hostname || "random Cloudflare URL",
+      this.status,
+      quickTunnel,
+    ]
       .filter(Boolean)
       .join("\t");
   }
@@ -53,7 +71,15 @@ export class CloudflareTunnel implements Publisher {
     if (this.isQuickTunnel) {
       return "";
     }
-    return `cloudflare-tunnel-vscode-${this.port}`;
+
+    const name = this.hostname!
+      .replace(/^https?:\/\//i, "")
+      .replace(/[^a-zA-Z0-9.-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 50);
+
+    return `cloudflare-tunnel-vscode-${name || "local"}`;
   }
 
   get isQuickTunnel(): boolean {
@@ -61,7 +87,7 @@ export class CloudflareTunnel implements Publisher {
   }
 
   get shortTunnelUri(): string {
-    return this.tunnelUri.slice(8);
+    return (this.tunnelUri || "").replace(/^https?:\/\//, "");
   }
 
   subscribe(subscriber: Subscriber): void {
