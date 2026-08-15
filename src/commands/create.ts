@@ -102,10 +102,10 @@ async function selectLocalOrigin(): Promise<{
   const url = new URL(
     /^https?:\/\//i.test(input) ? input : `http://${input}`
   );
-  const { hostname } = url;
+  const { hostname, port: rawPort } = url;
   const protocol = url.protocol === "https:" ? "https" : "http";
   const defaultPort = protocol === "https" ? 443 : 80;
-  const port = url.port ? Number(url.port) : defaultPort;
+  const port = rawPort ? Number(rawPort) : defaultPort;
   const origin = url.origin;
 
   globalState.addRecentLocalOrigin(origin, MAX_RECENT_LOCAL_ORIGINS);
