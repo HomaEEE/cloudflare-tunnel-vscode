@@ -14,7 +14,6 @@ export async function activate(context: vscode.ExtensionContext) {
   global.testExtensionContext = context;
 
   const globalState = GlobalState.init(context);
-
   cloudflared = await CloudflaredClient.init(context);
 
   commands.forEach(callback => {
@@ -34,15 +33,17 @@ export async function activate(context: vscode.ExtensionContext) {
 export async function deactivate() {
   const { tunnels } = cloudflareTunnelProvider;
 
-  for (const tunnel of tunnels) {
-    if (tunnel.process) {
-      await cloudflared.stop(tunnel);
-    }
+  await Promise.all(
+    tunnels.map(async tunnel => {
+      if (tunnel.process) {
+        await cloudflared.stop(tunnel);
+      }
 
-    cloudflared.cleanupTunnelConfig(tunnel);
+      cloudflared.cleanupTunnelConfig(tunnel);
 
-    if (!tunnel.isQuickTunnel) {
-      await cloudflared.deleteTunnel(tunnel);
-    }
-  }
+      if (!tunnel.isQuickTunnel) {
+        await cloudflared.deleteTunnel(tunnel);
+      }
+    })
+  );
 }
