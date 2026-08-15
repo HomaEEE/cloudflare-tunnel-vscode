@@ -34,7 +34,6 @@ export class CloudflaredClient extends ExecutableClient {
   async createTunnel(tunnel: CloudflareTunnel): Promise<void> {
     const { tunnelName } = tunnel;
     const tunnels = await this.exec(["tunnel", "list"]);
-
     const existingId = this.extractTunnelId(tunnels, tunnelName);
 
     if (existingId) {
@@ -79,7 +78,7 @@ export class CloudflaredClient extends ExecutableClient {
     );
   }
 
-  private createConfigPath(tunnel: CloudflareTunnel): string {
+  private createConfigPath(): string {
     return path.join(
       os.tmpdir(),
       `cloudflare-tunnel-vscode-${process.pid}-${Date.now()}.yml`
@@ -91,7 +90,7 @@ export class CloudflaredClient extends ExecutableClient {
       throw new Error("Tunnel credentials are not available.");
     }
 
-    const configPath = this.createConfigPath(tunnel);
+    const configPath = this.createConfigPath();
     const credentialsFile = path.join(
       os.homedir(),
       ".cloudflared",
@@ -184,13 +183,6 @@ export class CloudflaredClient extends ExecutableClient {
 
       let isCancelled = false;
 
-      const cancel = () => {
-        if (!isCancelled) {
-          process.stderr?.removeListener("data", onData);
-        }
-        isCancelled = true;
-      };
-
       const onData = (data: Buffer) => {
         if (isCancelled) {
           return;
@@ -210,21 +202,24 @@ export class CloudflaredClient extends ExecutableClient {
               .find(word => word.endsWith(".trycloudflare.com"));
 
             if (tunnelUri) {
-              cancel();
+              isCancelled = true;
+              process.stderr?.removeListener("data", onData);
               resolve(tunnelUri);
               return;
             }
           }
 
           if (tunnel.hostname && info.includes("connIndex=")) {
-            cancel();
+            isCancelled = true;
+            process.stderr?.removeListener("data", onData);
             resolve(`https://${tunnel.hostname}`);
             return;
           }
 
           if (logLevel === "ERR") {
-            void this.stop(tunnel);
-            cancel();
+            isCancelled = true;
+            process.stderr?.removeListener("data", onData);
+            this.stop(tunnel);
             reject(new Error(info));
           }
         });
