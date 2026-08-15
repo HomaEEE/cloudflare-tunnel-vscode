@@ -102,6 +102,7 @@ async function selectLocalOrigin(): Promise<{
   const url = new URL(
     /^https?:\/\//i.test(input) ? input : `http://${input}`
   );
+  const { hostname } = url;
   const protocol = url.protocol === "https:" ? "https" : "http";
   const defaultPort = protocol === "https" ? 443 : 80;
   const port = url.port ? Number(url.port) : defaultPort;
@@ -111,7 +112,7 @@ async function selectLocalOrigin(): Promise<{
 
   return {
     origin,
-    hostname: url.hostname,
+    hostname,
     protocol,
     port,
   };
@@ -170,7 +171,7 @@ async function createTunnel(): Promise<void> {
         },
         async (progress, token) => {
           token.onCancellationRequested(() => {
-            void cloudflared.stop(tunnel);
+            cloudflared.stop(tunnel);
             cloudflareTunnelProvider.removeTunnel(tunnel);
           });
 
