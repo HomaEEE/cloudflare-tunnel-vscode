@@ -1,8 +1,8 @@
 {
   "name": "cloudflaretunnel",
   "displayName": "Cloudflare Tunnel",
-  "description": "A VSCode extension to create a local tunnel through Cloudflare",
-  "version": "1.0.3",
+  "description": "A VSCode extension to create and manage Cloudflare tunnels for local sites",
+  "version": "1.1.0",
   "engines": {
     "vscode": "^1.91.0"
   },
@@ -25,16 +25,8 @@
   },
   "icon": "images/icon.png",
   "license": "MIT",
-  "categories": [
-    "Other"
-  ],
-  "keywords": [
-    "cloudflare",
-    "tunnel",
-    "ngrok",
-    "remote",
-    "http"
-  ],
+  "categories": ["Other"],
+  "keywords": ["cloudflare", "tunnel", "ngrok", "remote", "http", "laravel", "herd", "valet"],
   "badges": [
     {
       "url": "https://img.shields.io/visual-studio-marketplace/azure-devops/installs/total/IvanArjona.cloudflaretunnel?color=%23007ACC&logo=Visual%20Studio%20Code&logoColor=%23007ACC&style=for-the-badge",
@@ -52,126 +44,38 @@
       "description": "Rating"
     }
   ],
-  "activationEvents": [
-    "onStartupFinished"
-  ],
-  "extensionDependencies": [
-    "mindaro-dev.file-downloader"
-  ],
+  "activationEvents": ["onStartupFinished"],
+  "extensionDependencies": ["mindaro-dev.file-downloader"],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      {
-        "command": "cloudflaretunnel.version",
-        "title": "Get version",
-        "category": "Cloudflare Tunnel"
-      },
-      {
-        "command": "cloudflaretunnel.openPanel",
-        "title": "Open panel",
-        "category": "Cloudflare Tunnel"
-      },
-      {
-        "command": "cloudflaretunnel.openOutputChannel",
-        "title": "Output channel",
-        "category": "Cloudflare Tunnel",
-        "icon": "$(output-view-icon)"
-      },
-      {
-        "command": "cloudflaretunnel.createTunnel",
-        "title": "Create Tunnel",
-        "category": "Cloudflare Tunnel"
-      },
-      {
-        "command": "cloudflaretunnel.stopTunnel",
-        "title": "Stop Tunnel",
-        "icon": "$(debug-stop)",
-        "category": "Cloudflare Tunnel"
-      },
-      {
-        "command": "cloudflaretunnel.openTunnelExternal",
-        "title": "Open Tunnel in browser",
-        "icon": "$(globe)",
-        "category": "Cloudflare Tunnel"
-      },
-      {
-        "command": "cloudflaretunnel.copyTunnelUriToClipboard",
-        "title": "Copy Tunnel uri to clipboard",
-        "icon": "$(clippy)",
-        "category": "Cloudflare Tunnel"
-      },
-      {
-        "command": "cloudflaretunnel.login",
-        "title": "Login",
-        "category": "Cloudflare Tunnel"
-      },
-      {
-        "command": "cloudflaretunnel.logout",
-        "title": "Logout",
-        "category": "Cloudflare Tunnel"
-      }
+      {"command": "cloudflaretunnel.version", "title": "Get version", "category": "Cloudflare Tunnel"},
+      {"command": "cloudflaretunnel.openPanel", "title": "Open panel", "category": "Cloudflare Tunnel"},
+      {"command": "cloudflaretunnel.openOutputChannel", "title": "Output channel", "category": "Cloudflare Tunnel", "icon": "$(output-view-icon)"},
+      {"command": "cloudflaretunnel.createTunnel", "title": "Create Tunnel", "category": "Cloudflare Tunnel"},
+      {"command": "cloudflaretunnel.stopTunnel", "title": "Stop Tunnel", "icon": "$(debug-stop)", "category": "Cloudflare Tunnel"},
+      {"command": "cloudflaretunnel.openTunnelExternal", "title": "Open Tunnel in browser", "icon": "$(globe)", "category": "Cloudflare Tunnel"},
+      {"command": "cloudflaretunnel.copyTunnelUriToClipboard", "title": "Copy Tunnel uri to clipboard", "icon": "$(clippy)", "category": "Cloudflare Tunnel"},
+      {"command": "cloudflaretunnel.login", "title": "Login", "category": "Cloudflare Tunnel"},
+      {"command": "cloudflaretunnel.logout", "title": "Logout", "category": "Cloudflare Tunnel"}
     ],
     "viewsContainers": {
-      "panel": [
-        {
-          "id": "cloudflaretunnel",
-          "title": "Cloudflare Tunnel",
-          "icon": "$(cloud)"
-        }
-      ]
+      "panel": [{"id": "cloudflaretunnel", "title": "Cloudflare Tunnel", "icon": "$(cloud)"}]
     },
     "views": {
-      "cloudflaretunnel": [
-        {
-          "id": "cloudflaretunnel.list",
-          "name": "Tunnels",
-          "contextualTitle": "Cloudflare tunnels"
-        }
-      ]
+      "cloudflaretunnel": [{"id": "cloudflaretunnel.list", "name": "Tunnels", "contextualTitle": "Cloudflare tunnels"}]
     },
     "menus": {
       "view/title": [
-        {
-          "command": "cloudflaretunnel.createTunnel",
-          "id": "cloudflaretunnel.list.add",
-          "group": "navigation",
-          "when": "view == cloudflaretunnel.list"
-        },
-        {
-          "command": "cloudflaretunnel.login",
-          "id": "cloudflaretunnel.list.login",
-          "group": "navigation",
-          "when": "view == cloudflaretunnel.list && !cloudflaretunnel.isLoggedIn"
-        },
-        {
-          "command": "cloudflaretunnel.logout",
-          "id": "cloudflaretunnel.list.logout",
-          "group": "navigation",
-          "when": "view == cloudflaretunnel.list && cloudflaretunnel.isLoggedIn"
-        },
-        {
-          "command": "cloudflaretunnel.openOutputChannel",
-          "id": "cloudflaretunnel.openOutputChannel",
-          "group": "navigation",
-          "when": "view == cloudflaretunnel.list"
-        }
+        {"command": "cloudflaretunnel.createTunnel", "id": "cloudflaretunnel.list.add", "group": "navigation", "when": "view == cloudflaretunnel.list"},
+        {"command": "cloudflaretunnel.login", "id": "cloudflaretunnel.list.login", "group": "navigation", "when": "view == cloudflaretunnel.list && !cloudflaretunnel.isLoggedIn"},
+        {"command": "cloudflaretunnel.logout", "id": "cloudflaretunnel.list.logout", "group": "navigation", "when": "view == cloudflaretunnel.list && cloudflaretunnel.isLoggedIn"},
+        {"command": "cloudflaretunnel.openOutputChannel", "id": "cloudflaretunnel.openOutputChannel", "group": "navigation", "when": "view == cloudflaretunnel.list"}
       ],
       "view/item/context": [
-        {
-          "command": "cloudflaretunnel.stopTunnel",
-          "group": "inline",
-          "when": "view == cloudflaretunnel.list && viewItem == Running"
-        },
-        {
-          "command": "cloudflaretunnel.openTunnelExternal",
-          "group": "inline",
-          "when": "view == cloudflaretunnel.list && viewItem == Running"
-        },
-        {
-          "command": "cloudflaretunnel.copyTunnelUriToClipboard",
-          "group": "inline",
-          "when": "view == cloudflaretunnel.list && viewItem == Running"
-        }
+        {"command": "cloudflaretunnel.stopTunnel", "group": "inline", "when": "view == cloudflaretunnel.list && viewItem == Running"},
+        {"command": "cloudflaretunnel.openTunnelExternal", "group": "inline", "when": "view == cloudflaretunnel.list && viewItem == Running"},
+        {"command": "cloudflaretunnel.copyTunnelUriToClipboard", "group": "inline", "when": "view == cloudflaretunnel.list && viewItem == Running"}
       ]
     },
     "configuration": {
@@ -179,17 +83,18 @@
       "properties": {
         "cloudflaretunnel.tunnel.defaultPort": {
           "type": "number",
-          "default": "8080",
-          "markdownDescription": "Default port number to expose in your local environment. Example: `8000`"
+          "default": 8080,
+          "markdownDescription": "Fallback local port when no Herd or Valet site can be detected."
         },
         "cloudflaretunnel.tunnel.defaultHostname": {
           "type": "string",
-          "markdownDescription": "Your domain hostname. If not specified anything, it will generate a `.trycloudflare.com` subdomain. Make sure to login and give proper permissions before changing this setting. Example: `mytunnel.mydomain.com`"
+          "default": "",
+          "markdownDescription": "Base domain for automatic named tunnels. Example: `example.com`. A local site `crm.test` becomes `crm.example.com`. Leave empty to use a random `.trycloudflare.com` Quick Tunnel."
         },
         "cloudflaretunnel.tunnel.localHostname": {
           "type": "string",
           "default": "localhost",
-          "markdownDescription": "A local hostname in your network. Your probably want `localhost` or `127.0.0.1`. It's also possible to use an ip of other machine in the same network. Example: `192.168.1.100`"
+          "markdownDescription": "Local address used as the origin service for named tunnels. Herd and Valet normally use localhost."
         },
         "cloudflaretunnel.gui.showStatusBarItem": {
           "type": "boolean",

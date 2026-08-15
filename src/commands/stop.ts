@@ -15,13 +15,19 @@ async function doStopTunnel(
 ): Promise<void> {
   token.onCancellationRequested(() => {
     cloudflared.stop(tunnel);
+    cloudflared.cleanupTunnelConfig(tunnel);
     cloudflareTunnelProvider.removeTunnel(tunnel);
   });
 
   progress.report({ message: "Stopping tunnel..." });
   await cloudflared.stop(tunnel);
-  progress.report({ message: "Deleting tunnel..." });
-  await cloudflared.deleteTunnel(tunnel);
+
+  cloudflared.cleanupTunnelConfig(tunnel);
+
+  if (!tunnel.isQuickTunnel) {
+    progress.report({ message: "Deleting tunnel..." });
+    await cloudflared.deleteTunnel(tunnel);
+  }
 
   cloudflareTunnelProvider.removeTunnel(tunnel);
   showInformationMessage("Cloudflare tunnel stopped");

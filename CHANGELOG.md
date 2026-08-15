@@ -2,6 +2,23 @@
 
 All notable changes to the Cloudflare Tunnels for VSCode extension will be documented in this file.
 
+## [1.1.0]
+
+### Added
+
+- Automatic detection of Laravel Herd and Valet sites from the current VS Code workspace.
+- Automatic public hostname generation from the local site hostname, for example `crm.test` -> `crm.example.com`.
+- Persistent history of the last 10 local origins.
+- Herd/Valet-compatible named tunnel configuration using `httpHostHeader`.
+- Automatic DNS routing for named Cloudflare tunnels.
+- Quick Tunnel fallback when Cloudflare is not authenticated or no base domain is configured.
+- Cleanup of temporary tunnel configuration files on stop/deactivation.
+
+### Changed
+
+- Named tunnels now use the public hostname as their identity instead of the local port, so multiple sites sharing port 80/443 can run simultaneously.
+- The existing `tunnel.defaultHostname` setting now represents the base public domain.
+
 ## [1.0.3] - 2024-09-24
 
 - MacOS support: prevent killing cloudflared on non-fatal errors.
