@@ -226,20 +226,44 @@ function parseValetLinks(output: string): LocalSite[] {
     .filter((site): site is LocalSite => site !== null);
 }
 
+function parseValetParked(output: string): LocalSite[] {
+  return output
+    .split(/\r?\n/)
+    .map(value => value.trim())
+    .filter(value => value.startsWith("/"))
+    .flatMap(parkedPath => {
+      try {
+        return fs
+          .readdirSync(parkedPath, { withFileTypes: true })
+          .filter(entry => entry.isDirectory())
+          .map(entry => ({
+            provider: "valet" as const,
+            path: path.join(parkedPath, entry.name),
+            hostname: `${entry.name}.test`,
+            protocol: "http" as const,
+            port: 80,
+          }));
+      } catch {
+        return [];
+      }
+    });
+}
+
 async function detectValetSites(): Promise<LocalSite[]> {
   if (!(await commandExists("valet"))) {
     return [];
   }
 
-  try {
-    const { stdout } = await execFileAsync("valet", ["links"], {
-      maxBuffer: 1024 * 1024,
-    });
+  const [links, parked] = await Promise.all([
+    execFileAsync("valet", ["links"], { maxBuffer: 1024 * 1024 })
+      .then(({ stdout }) => parseValetLinks(stdout))
+      .catch(() => []),
+    execFileAsync("valet", ["parked"], { maxBuffer: 1024 * 1024 })
+      .then(({ stdout }) => parseValetParked(stdout))
+      .catch(() => []),
+  ]);
 
-    return parseValetLinks(stdout);
-  } catch {
-    return [];
-  }
+  return deduplicateSites([...links, ...parked]);
 }
 
 async function detectMampSites(): Promise<LocalSite[]> {
