@@ -21,7 +21,7 @@ function normalizeBaseDomain(value: string): string {
 }
 
 function getSubdomain(hostname: string): string {
-  const firstLabel = hostname.split(".")[0].toLowerCase();
+  const [firstLabel] = hostname.toLowerCase().split(".");
   const value = firstLabel.replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
 
   if (!value || value.startsWith("-") || value.endsWith("-")) {
@@ -50,6 +50,7 @@ async function selectLocalOrigin(): Promise<{
   if (site) {
     const origin = buildLocalOrigin(site);
     globalState.addRecentLocalOrigin(origin, MAX_RECENT_LOCAL_ORIGINS);
+
     return {
       origin,
       hostname: site.hostname,
@@ -80,22 +81,27 @@ async function selectLocalOrigin(): Promise<{
     throw new Error("A local origin is required.");
   }
 
-  const input =
-    selected === items[0]
-      ? await vscode.window.showInputBox({
-          title: "Local origin",
-          value: recent[0] || `${config.localHostname}:${config.defaultPort}`,
-          placeHolder: "http://example.test or http://127.0.0.1:8080",
-          prompt: "Enter the local origin that cloudflared should reach.",
-          ignoreFocusOut: true,
-        })
-      : selected.label;
+  let input: string | undefined;
+
+  if (selected === items[0]) {
+    input = await vscode.window.showInputBox({
+      title: "Local origin",
+      value: recent[0] || `${config.localHostname}:${config.defaultPort}`,
+      placeHolder: "http://example.test or http://127.0.0.1:8080",
+      prompt: "Enter the local origin that cloudflared should reach.",
+      ignoreFocusOut: true,
+    });
+  } else {
+    input = selected.label;
+  }
 
   if (!input) {
     throw new Error("A local origin is required.");
   }
 
-  const url = new URL(/^https?:\/\//i.test(input) ? input : `http://${input}`);
+  const url = new URL(
+    /^https?:\/\//i.test(input) ? input : `http://${input}`
+  );
   const protocol = url.protocol === "https:" ? "https" : "http";
   const defaultPort = protocol === "https" ? 443 : 80;
   const port = url.port ? Number(url.port) : defaultPort;
@@ -111,7 +117,9 @@ async function selectLocalOrigin(): Promise<{
   };
 }
 
-async function resolvePublicHostname(localHostname: string): Promise<string | null> {
+async function resolvePublicHostname(
+  localHostname: string
+): Promise<string | null> {
   if (!globalState.isLoggedIn) {
     return null;
   }
@@ -162,7 +170,7 @@ async function createTunnel(): Promise<void> {
         },
         async (progress, token) => {
           token.onCancellationRequested(() => {
-            cloudflared.stop(tunnel);
+            void cloudflared.stop(tunnel);
             cloudflareTunnelProvider.removeTunnel(tunnel);
           });
 
