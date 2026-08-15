@@ -36,7 +36,15 @@ function parseUrl(value: string): {
     }
 
     const protocol = url.protocol === "https:" ? "https" : "http";
-    const port = url.port ? Number(url.port) : protocol === "https" ? 443 : 80;
+    let port: number;
+
+    if (url.port) {
+      port = Number(url.port);
+    } else if (protocol === "https") {
+      port = 443;
+    } else {
+      port = 80;
+    }
 
     return {
       hostname: url.hostname,
@@ -148,7 +156,7 @@ async function detectHerdSites(workspacePath: string): Promise<LocalSite | null>
             }
           : null;
       })
-      .find(value => value !== null);
+      .find(value => value !== null) || null;
 
     if (site) {
       return site;
@@ -162,13 +170,11 @@ async function detectHerdSites(workspacePath: string): Promise<LocalSite | null>
       maxBuffer: 1024 * 1024,
     });
 
-    return (
-      stdout
-        .split(/\r?\n/)
-        .filter(line => line.includes("|"))
-        .map(line => parseHerdLinkLine(line, workspacePath))
-        .find(value => value !== null) || null
-    );
+    return stdout
+      .split(/\r?\n/)
+      .filter(line => line.includes("|"))
+      .map(line => parseHerdLinkLine(line, workspacePath))
+      .find(value => value !== null) || null;
   } catch {
     return null;
   }
@@ -210,12 +216,10 @@ async function detectValetSites(workspacePath: string): Promise<LocalSite | null
       maxBuffer: 1024 * 1024,
     });
 
-    return (
-      stdout
-        .split(/\r?\n/)
-        .map(line => parseValetLinkLine(line, workspacePath))
-        .find(value => value !== null) || null
-    );
+    return stdout
+      .split(/\r?\n/)
+      .map(line => parseValetLinkLine(line, workspacePath))
+      .find(value => value !== null) || null;
   } catch {
     return null;
   }
