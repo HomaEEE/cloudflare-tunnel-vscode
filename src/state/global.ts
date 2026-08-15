@@ -33,6 +33,25 @@ export class GlobalState {
     this.state.update("cloudflaredUri", value);
   }
 
+  get recentLocalOrigins(): string[] {
+    return this.state.get<string[]>("recentLocalOrigins", []);
+  }
+
+  addRecentLocalOrigin(origin: string, limit = 10): void {
+    const value = origin.trim();
+
+    if (!value) {
+      return;
+    }
+
+    const recent = [
+      value,
+      ...this.recentLocalOrigins.filter(item => item !== value),
+    ].slice(0, limit);
+
+    this.state.update("recentLocalOrigins", recent);
+  }
+
   setIsLoggedInContext(value: boolean): void {
     setContext(constants.Context.isLoggedIn, value);
   }
