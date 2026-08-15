@@ -30,29 +30,35 @@ function parseUrl(value: string): {
 } | null {
   try {
     const url = new URL(value);
+
     if (!url.hostname || !["http:", "https:"].includes(url.protocol)) {
       return null;
     }
 
+    const protocol = url.protocol === "https:" ? "https" : "http";
+    const port = url.port ? Number(url.port) : protocol === "https" ? 443 : 80;
+
     return {
       hostname: url.hostname,
-      protocol: url.protocol === "https:" ? "https" : "http",
-      port: url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80,
+      protocol,
+      port,
     };
   } catch {
     return null;
   }
 }
 
-function firstString(object: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = object[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-
-  return undefined;
+function firstString(
+  object: Record<string, unknown>,
+  keys: string[]
+): string | undefined {
+  return keys
+    .map(key => object[key])
+    .find(
+      (value): value is string =>
+        typeof value === "string" && Boolean(value.trim())
+    )
+    ?.trim();
 }
 
 function objectsFromJson(value: unknown): Record<string, unknown>[] {
@@ -63,19 +69,15 @@ function objectsFromJson(value: unknown): Record<string, unknown>[] {
     );
   }
 
-  if (typeof value === "object" && value !== null) {
-    const object = value as Record<string, unknown>;
-    const collections = [object.sites, object.data, object.results];
-
-    for (const collection of collections) {
-      const result = objectsFromJson(collection);
-      if (result.length > 0) {
-        return result;
-      }
-    }
+  if (typeof value !== "object" || value === null) {
+    return [];
   }
 
-  return [];
+  const object = value as Record<string, unknown>;
+
+  return [object.sites, object.data, object.results]
+    .map(collection => objectsFromJson(collection))
+    .find(result => result.length > 0) || [];
 }
 
 async function commandExists(command: string): Promise<boolean> {
@@ -85,6 +87,33 @@ async function commandExists(command: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function parseHerdLinkLine(line: string, workspacePath: string): LocalSite | null {
+  const columns = line
+    .split("|")
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  if (columns.length < 4) {
+    return null;
+  }
+
+  const [, , rawUrl, sitePath] = columns;
+
+  if (!sitePath || !rawUrl || !isSamePath(sitePath, workspacePath)) {
+    return null;
+  }
+
+  const parsed = parseUrl(rawUrl);
+
+  return parsed
+    ? {
+        provider: "herd",
+        path: sitePath,
+        ...parsed,
+      }
+    : null;
 }
 
 async function detectHerdSites(workspacePath: string): Promise<LocalSite | null> {
@@ -98,71 +127,75 @@ async function detectHerdSites(workspacePath: string): Promise<LocalSite | null>
     });
     const rows = objectsFromJson(JSON.parse(stdout));
 
-    for (const row of rows) {
-      const sitePath = firstString(row, ["path", "directory", "sitePath"]);
-      if (!sitePath || !isSamePath(sitePath, workspacePath)) {
-        continue;
-      }
+    const site = rows
+      .map(row => {
+        const sitePath = firstString(row, ["path", "directory", "sitePath"]);
+        const rawUrl = firstString(row, ["url", "siteUrl", "host", "hostname"]);
 
-      const rawUrl = firstString(row, ["url", "siteUrl", "host", "hostname"]);
-      if (!rawUrl) {
-        continue;
-      }
+        if (!sitePath || !rawUrl || !isSamePath(sitePath, workspacePath)) {
+          return null;
+        }
 
-      const parsed = parseUrl(rawUrl.includes("://") ? rawUrl : `http://${rawUrl}`);
-      if (!parsed) {
-        continue;
-      }
+        const parsed = parseUrl(
+          rawUrl.includes("://") ? rawUrl : `http://${rawUrl}`
+        );
 
-      return {
-        provider: "herd",
-        path: sitePath,
-        ...parsed,
-      };
+        return parsed
+          ? {
+              provider: "herd" as const,
+              path: sitePath,
+              ...parsed,
+            }
+          : null;
+      })
+      .find((value): value is LocalSite => value !== null);
+
+    if (site) {
+      return site;
     }
   } catch {
-    // Fall back to the table output below.
+    // Fall through to herd links.
   }
 
   try {
     const { stdout } = await execFileAsync("herd", ["links"], {
       maxBuffer: 1024 * 1024,
     });
-    const lines = stdout.split(/\r?\n/).filter(line => line.includes("|"));
 
-    for (const line of lines) {
-      const columns = line
-        .split("|")
-        .map(value => value.trim())
-        .filter(Boolean);
-
-      if (columns.length < 4 || !columns[3]) {
-        continue;
-      }
-
-      const sitePath = columns[3];
-      const rawUrl = columns[2];
-
-      if (!isSamePath(sitePath, workspacePath) || !rawUrl) {
-        continue;
-      }
-
-      const parsed = parseUrl(rawUrl);
-      if (!parsed) {
-        continue;
-      }
-
-      return {
-        provider: "herd",
-        path: sitePath,
-        ...parsed,
-      };
-    }
+    return stdout
+      .split(/\r?\n/)
+      .filter(line => line.includes("|"))
+      .map(line => parseHerdLinkLine(line, workspacePath))
+      .find((value): value is LocalSite => value !== null) || null;
   } catch {
-    // Use the deterministic folder fallback below.
+    return null;
+  }
+}
+
+function parseValetLinkLine(
+  line: string,
+  workspacePath: string
+): LocalSite | null {
+  const match = line.match(/^\s*([^\s]+)\s*=>\s*(.+)$/);
+
+  if (!match) {
+    return null;
   }
 
-  return null;
+  const [, hostname, sitePath] = match;
+  const normalizedSitePath = sitePath.trim();
+
+  if (!isSamePath(normalizedSitePath, workspacePath)) {
+    return null;
+  }
+
+  return {
+    provider: "valet",
+    path: normalizedSitePath,
+    hostname: hostname.endsWith(".test") ? hostname : `${hostname}.test`,
+    protocol: "http",
+    port: 80,
+  };
 }
 
 async function detectValetSites(workspacePath: string): Promise<LocalSite | null> {
@@ -174,35 +207,20 @@ async function detectValetSites(workspacePath: string): Promise<LocalSite | null
     const { stdout } = await execFileAsync("valet", ["links"], {
       maxBuffer: 1024 * 1024,
     });
-    const lines = stdout.split(/\r?\n/);
 
-    for (const line of lines) {
-      const match = line.match(/^\s*([^\s]+)\s*=>\s*(.+)$/);
-      if (!match) {
-        continue;
-      }
-
-      const [, hostname, sitePath] = match;
-      if (!isSamePath(sitePath.trim(), workspacePath)) {
-        continue;
-      }
-
-      return {
-        provider: "valet",
-        path: sitePath.trim(),
-        hostname: hostname.endsWith(".test") ? hostname : `${hostname}.test`,
-        protocol: "http",
-        port: 80,
-      };
-    }
+    return stdout
+      .split(/\r?\n/)
+      .map(line => parseValetLinkLine(line, workspacePath))
+      .find((value): value is LocalSite => value !== null) || null;
   } catch {
-    // Use the deterministic folder fallback below.
+    return null;
   }
-
-  return null;
 }
 
-function genericSite(workspacePath: string, provider: LocalSiteProvider): LocalSite {
+function genericSite(
+  workspacePath: string,
+  provider: LocalSiteProvider
+): LocalSite {
   const name = path.basename(workspacePath).toLowerCase();
   const safeName = name.replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
 
@@ -215,19 +233,22 @@ function genericSite(workspacePath: string, provider: LocalSiteProvider): LocalS
   };
 }
 
-export async function detectLocalSite(workspacePath?: string): Promise<LocalSite | null> {
+export async function detectLocalSite(
+  workspacePath?: string
+): Promise<LocalSite | null> {
   if (!workspacePath) {
     return null;
   }
 
   const resolvedPath = fs.realpathSync.native(workspacePath);
-
   const herd = await detectHerdSites(resolvedPath);
+
   if (herd) {
     return herd;
   }
 
   const valet = await detectValetSites(resolvedPath);
+
   if (valet) {
     return valet;
   }
