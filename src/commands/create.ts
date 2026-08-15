@@ -14,6 +14,7 @@ const MAX_RECENT_LOCAL_ORIGINS = 10;
 interface LocalSiteItem extends vscode.QuickPickItem {
   site?: LocalSite;
   manual?: boolean;
+  recent?: string;
 }
 
 function normalizeBaseDomain(value: string): string {
@@ -62,6 +63,7 @@ async function selectLocalOrigin(): Promise<{
 }> {
   const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const sites = await detectLocalSites(workspacePath);
+  const recent = globalState.recentLocalOrigins;
   const currentPath = workspacePath || "";
 
   const items: LocalSiteItem[] = [
@@ -78,6 +80,13 @@ async function selectLocalOrigin(): Promise<{
       detail: site.path,
       site,
     })),
+    ...recent
+      .filter(origin => !sites.some(site => buildLocalOrigin(site) === origin))
+      .map(origin => ({
+        label: origin,
+        description: "Recent local origin",
+        recent: origin,
+      })),
   ];
 
   const selected = await vscode.window.showQuickPick(items, {
@@ -96,7 +105,6 @@ async function selectLocalOrigin(): Promise<{
   }
 
   if (selected.manual) {
-    const recent = globalState.recentLocalOrigins;
     const input = await vscode.window.showInputBox({
       title: "Local origin",
       value: recent[0] || `${config.localHostname}:${config.defaultPort}`,
@@ -138,29 +146,42 @@ async function selectLocalOrigin(): Promise<{
     );
     const { hostname } = url;
     const protocol = url.protocol === "https:" ? "https" : "http";
-    const defaultPort = protocol === "https" ? 443 : 80;
-    const port = url.port ? Number(url.port) : defaultPort;
-    const origin = url.origin;
+    let port = 80;
 
+    if (url.port) {
+      port = Number(url.port);
+    } else if (protocol === "https") {
+      port = 443;
+    }
+
+    const origin = url.origin;
     globalState.addRecentLocalOrigin(origin, MAX_RECENT_LOCAL_ORIGINS);
 
     return { origin, hostname, protocol, port };
   }
 
-  if (!selected.site) {
-    throw new Error("The selected local site is invalid.");
+  const origin = selected.site
+    ? buildLocalOrigin(selected.site)
+    : selected.recent || selected.label;
+
+  const url = new URL(origin);
+  const { hostname } = url;
+  const protocol = url.protocol === "https:" ? "https" : "http";
+  let port = 80;
+
+  if (url.port) {
+    port = Number(url.port);
+  } else if (protocol === "https") {
+    port = 443;
   }
 
-  const { site } = selected;
-  const origin = buildLocalOrigin(site);
-
-  globalState.addRecentLocalOrigin(origin, MAX_RECENT_LOCAL_ORIGINS);
+  globalState.addRecentLocalOrigin(url.origin, MAX_RECENT_LOCAL_ORIGINS);
 
   return {
-    origin,
-    hostname: site.hostname,
-    protocol: site.protocol,
-    port: site.port,
+    origin: url.origin,
+    hostname,
+    protocol,
+    port,
   };
 }
 
